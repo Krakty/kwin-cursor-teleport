@@ -6,7 +6,7 @@
 pkgname=kwin
 pkgver=6.6.5
 _dirver=$(echo $pkgver | cut -d. -f1-3)
-pkgrel=1.cursorteleport1
+pkgrel=1.1
 pkgdesc='An easy to use, but flexible, Wayland compositor (CursorEdgeTeleport patched)'
 arch=(x86_64)
 url='https://kde.org/plasma-desktop/'
@@ -82,7 +82,7 @@ optdepends=('plasma-keyboard: virtual keyboard')
 groups=(plasma)
 provides=("kwin=$pkgver")
 source=(https://download.kde.org/stable/plasma/$_dirver/$pkgname-$pkgver.tar.xz
-        0001-cursor-edge-teleport.patch::../patches/6.6.5/0001-cursor-edge-teleport.patch)
+        0001-cursor-edge-teleport.patch)
 sha256sums=('6c187ce7a5506090b438ef900103836fa0537674dde8b31e5b497ef321643cb4'
             'SKIP')
 
