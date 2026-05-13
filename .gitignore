@@ -1,0 +1,14 @@
+# Arch packaging artifacts
+packaging/*.pkg.tar.zst
+packaging/*.pkg.tar.zst.sig
+packaging/src/
+packaging/pkg/
+
+# Editor backups
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build directories that might leak in via SSHFS
+build/
