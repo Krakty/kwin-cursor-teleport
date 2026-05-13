@@ -1,0 +1,104 @@
+# Maintainer: Felix Yan <felixonmars@archlinux.org>
+# Maintainer: Antonio Rojas <arojas@archlinux.org>
+# Contributor: Andrea Scarpino <andrea@archlinux.org>
+# Local fork: tlindell — applies cursor-edge-teleport patch
+
+pkgname=kwin
+pkgver=6.6.5
+_dirver=$(echo $pkgver | cut -d. -f1-3)
+pkgrel=1.cursorteleport1
+pkgdesc='An easy to use, but flexible, Wayland compositor (CursorEdgeTeleport patched)'
+arch=(x86_64)
+url='https://kde.org/plasma-desktop/'
+license=(LGPL-2.0-or-later)
+depends=(aurorae
+         breeze
+         gcc-libs
+         glibc
+         iio-sensor-proxy
+         plasma-activities
+         kauth
+         kcmutils
+         kcolorscheme
+         kconfig
+         kcoreaddons
+         kcrash
+         kdbusaddons
+         kdeclarative
+         kdecoration
+         kglobalaccel
+         kglobalacceld
+         kguiaddons
+         ki18n
+         kidletime
+         kirigami
+         kitemmodels
+         knewstuff
+         knighttime
+         knotifications
+         kpackage
+         kquickcharts
+         kscreenlocker
+         kservice
+         ksvg
+         kwayland
+         kwidgetsaddons
+         kwindowsystem
+         kxmlgui
+         lcms2
+         libcanberra
+         libdisplay-info
+         libdrm
+         libei
+         libepoxy
+         libevdev
+         libinput
+         libpipewire
+         libqaccessibilityclient-qt6
+         libxcb
+         libxcvt
+         libxkbcommon
+         mesa
+         milou
+         pipewire-session-manager
+         libplasma
+         qt6-5compat
+         qt6-base
+         qt6-declarative
+         qt6-svg
+         qt6-tools
+         systemd-libs
+         wayland
+         xcb-util-keysyms
+         xcb-util-wm)
+makedepends=(extra-cmake-modules
+             kdoctools
+             krunner
+             plasma-wayland-protocols
+             python
+             wayland-protocols
+             xorg-xwayland)
+optdepends=('plasma-keyboard: virtual keyboard')
+groups=(plasma)
+provides=("kwin=$pkgver")
+source=(https://download.kde.org/stable/plasma/$_dirver/$pkgname-$pkgver.tar.xz
+        0001-cursor-edge-teleport.patch::../patches/6.6.5/0001-cursor-edge-teleport.patch)
+sha256sums=('6c187ce7a5506090b438ef900103836fa0537674dde8b31e5b497ef321643cb4'
+            'SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  patch -p1 < "$srcdir/0001-cursor-edge-teleport.patch"
+}
+
+build() {
+  cmake -B build  -S $pkgname-$pkgver \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib \
+    -DBUILD_TESTING=OFF
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  setcap CAP_SYS_NICE=+ep "$pkgdir"/usr/bin/kwin_wayland
+}

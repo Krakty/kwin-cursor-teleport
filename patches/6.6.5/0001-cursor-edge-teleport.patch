@@ -1,0 +1,495 @@
+From 56674ff9846617591cfe423143aa5cdae5d205dd Mon Sep 17 00:00:00 2001
+From: tlindell <tlindell@gmail.com>
+Date: Wed, 13 May 2026 10:44:09 -0500
+Subject: [PATCH] Add CursorEdgeTeleport: warp cursor across unaligned outputs
+
+Adds an opt-in cursor-warp behavior controlled by
+[CursorEdgeTeleport]/Enabled in kwinrc. When enabled, motion that would
+corner-pin the cursor in a dead zone (no adjacent output at the
+cursors perpendicular coordinate) instead warps to the nearest
+reachable point on an adjacent output in the motion direction.
+
+When the flag is off (default), behavior is byte-identical to stock
+KWin.
+
+New modules:
+  src/cursor_edge_teleport.{h,cpp}        Pure geometry algorithm
+  src/cursor_edge_teleport_config.{h,cpp} kwinrc reader + KConfigWatcher
+  autotests/test_cursor_edge_teleport.cpp 9 unit tests, 1ms runtime
+
+Modified:
+  src/pointer_input.cpp     Conditional block in updatePosition before
+                            the existing confineToBoundingBox clamp;
+                            CursorEdgeTeleportConfig::load() wired into
+                            PointerInputRedirection::init()
+  src/CMakeLists.txt        Registers new sources
+  autotests/CMakeLists.txt  Registers testCursorEdgeTeleport target
+
+Enable via:
+  kwriteconfig6 --file kwinrc --group CursorEdgeTeleport --key Enabled true
+  qdbus org.kde.KWin /KWin reconfigure
+---
+ autotests/CMakeLists.txt                |  12 ++
+ autotests/test_cursor_edge_teleport.cpp | 144 ++++++++++++++++++++++++
+ src/CMakeLists.txt                      |   2 +
+ src/cursor_edge_teleport.cpp            |  82 ++++++++++++++
+ src/cursor_edge_teleport.h              |  38 +++++++
+ src/cursor_edge_teleport_config.cpp     |  56 +++++++++
+ src/cursor_edge_teleport_config.h       |  16 +++
+ src/pointer_input.cpp                   |  22 +++-
+ 8 files changed, 371 insertions(+), 1 deletion(-)
+ create mode 100644 autotests/test_cursor_edge_teleport.cpp
+ create mode 100644 src/cursor_edge_teleport.cpp
+ create mode 100644 src/cursor_edge_teleport.h
+ create mode 100644 src/cursor_edge_teleport_config.cpp
+ create mode 100644 src/cursor_edge_teleport_config.h
+
+diff --git a/autotests/CMakeLists.txt b/autotests/CMakeLists.txt
+index 680a77317..2b849590f 100644
+--- a/autotests/CMakeLists.txt
++++ b/autotests/CMakeLists.txt
+@@ -284,3 +284,15 @@ target_link_libraries(testRegion
+ )
+ add_test(NAME kwin-testRegion COMMAND testRegion)
+ ecm_mark_as_test(testRegion)
++
++########################################################
++# Test CursorEdgeTeleport
++########################################################
++set(testCursorEdgeTeleport_SRCS
++    ../src/cursor_edge_teleport.cpp
++    test_cursor_edge_teleport.cpp
++)
++add_executable(testCursorEdgeTeleport ${testCursorEdgeTeleport_SRCS})
++target_link_libraries(testCursorEdgeTeleport Qt::Test Qt::Core)
++add_test(NAME kwin-testCursorEdgeTeleport COMMAND testCursorEdgeTeleport)
++ecm_mark_as_test(testCursorEdgeTeleport)
+diff --git a/autotests/test_cursor_edge_teleport.cpp b/autotests/test_cursor_edge_teleport.cpp
+new file mode 100644
+index 000000000..ff82f7cd2
+--- /dev/null
++++ b/autotests/test_cursor_edge_teleport.cpp
+@@ -0,0 +1,144 @@
++/*
++    SPDX-FileCopyrightText: 2026 tlindell <tlindell@gmail.com>
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++#include "cursor_edge_teleport.h"
++
++#include <QList>
++#include <QPointF>
++#include <QRectF>
++#include <QTest>
++
++using namespace KWin;
++
++class TestCursorEdgeTeleport : public QObject
++{
++    Q_OBJECT
++private Q_SLOTS:
++    void testCandidateInsideOutput();
++    void testCleanAlignedCrossing();
++    void testDeadZoneTeleportsToNearestEdge();
++    void testBackwardsWarpRejected();
++    void testClosestAmongMultipleCandidates();
++    void testEmptyOutputList();
++    void testSingleOutput();
++    void testZeroDeltaCandidate();
++    void testNegativeCoordinateOutput();
++};
++
++void TestCursorEdgeTeleport::testCandidateInsideOutput()
++{
++    const QList<QRectF> outputs = {
++        QRectF(0, 0, 3840, 2160),
++        QRectF(3840, 360, 2560, 1440),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(3839, 1000),
++        QPointF(3849, 1000),
++        outputs);
++    QVERIFY(!result.has_value());
++}
++
++void TestCursorEdgeTeleport::testCleanAlignedCrossing()
++{
++    const QList<QRectF> outputs = {
++        QRectF(0, 0, 1920, 1080),
++        QRectF(1920, 0, 1920, 1080),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(1919, 500),
++        QPointF(1925, 500),
++        outputs);
++    QVERIFY(!result.has_value());
++}
++
++void TestCursorEdgeTeleport::testDeadZoneTeleportsToNearestEdge()
++{
++    const QList<QRectF> outputs = {
++        QRectF(0, 0, 3840, 2160),
++        QRectF(3840, 360, 2560, 1440),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(3839, 100),
++        QPointF(3849, 100),
++        outputs);
++    QVERIFY(result.has_value());
++    QCOMPARE(*result, QPointF(3849, 360));
++}
++
++void TestCursorEdgeTeleport::testBackwardsWarpRejected()
++{
++    const QList<QRectF> outputs = {
++        QRectF(0, 0, 3840, 2160),
++        QRectF(3840, 360, 2560, 1440),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(0, 0),
++        QPointF(-10, -10),
++        outputs);
++    QVERIFY(!result.has_value());
++}
++
++void TestCursorEdgeTeleport::testClosestAmongMultipleCandidates()
++{
++    const QList<QRectF> outputs = {
++        QRectF(0, 0, 100, 100),
++        QRectF(200, 0, 100, 100),
++        QRectF(400, 0, 100, 100),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(99, 50),
++        QPointF(150, 50),
++        outputs);
++    QVERIFY(result.has_value());
++    QCOMPARE(*result, QPointF(200, 50));
++}
++
++void TestCursorEdgeTeleport::testEmptyOutputList()
++{
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(100, 100),
++        QPointF(110, 110),
++        {});
++    QVERIFY(!result.has_value());
++}
++
++void TestCursorEdgeTeleport::testSingleOutput()
++{
++    const QList<QRectF> outputs = {QRectF(0, 0, 100, 100)};
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(99, 50),
++        QPointF(110, 50),
++        outputs);
++    QVERIFY(!result.has_value());
++}
++
++void TestCursorEdgeTeleport::testZeroDeltaCandidate()
++{
++    const QList<QRectF> outputs = {
++        QRectF(0, 0, 100, 100),
++        QRectF(200, 0, 100, 100),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(150, 50),
++        QPointF(150, 50),
++        outputs);
++    QVERIFY(!result.has_value());
++}
++
++void TestCursorEdgeTeleport::testNegativeCoordinateOutput()
++{
++    const QList<QRectF> outputs = {
++        QRectF(-1000, 0, 1000, 1000),
++        QRectF(0, 100, 1000, 800),
++    };
++    const auto result = CursorEdgeTeleport::resolve(
++        QPointF(-1, 50),
++        QPointF(10, 50),
++        outputs);
++    QVERIFY(result.has_value());
++    QCOMPARE(*result, QPointF(10, 100));
++}
++
++QTEST_GUILESS_MAIN(TestCursorEdgeTeleport)
++#include "test_cursor_edge_teleport.moc"
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 5429e7e5e..51ab8a915 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -146,6 +146,8 @@ target_sources(kwin PRIVATE
+     placementtracker.cpp
+     plugin.cpp
+     pluginmanager.cpp
++    cursor_edge_teleport.cpp
++    cursor_edge_teleport_config.cpp
+     pointer_input.cpp
+     popup_input_filter.cpp
+     qpainter/qpainterbackend.cpp
+diff --git a/src/cursor_edge_teleport.cpp b/src/cursor_edge_teleport.cpp
+new file mode 100644
+index 000000000..a34640bea
+--- /dev/null
++++ b/src/cursor_edge_teleport.cpp
+@@ -0,0 +1,82 @@
++/*
++    SPDX-FileCopyrightText: 2026 tlindell <tlindell@gmail.com>
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++#include "cursor_edge_teleport.h"
++
++#include <algorithm>
++#include <limits>
++
++namespace KWin
++{
++
++namespace
++{
++
++QPointF projectOntoRect(const QPointF &p, const QRectF &r)
++{
++    return QPointF(
++        std::clamp(p.x(), r.left(), r.right()),
++        std::clamp(p.y(), r.top(), r.bottom()));
++}
++
++qreal squaredDistance(const QPointF &a, const QPointF &b)
++{
++    const QPointF d = a - b;
++    return QPointF::dotProduct(d, d);
++}
++
++} // anonymous namespace
++
++std::optional<QPointF> CursorEdgeTeleport::resolve(
++    const QPointF &currentPos,
++    const QPointF &candidate,
++    const QList<QRectF> &allOutputRects)
++{
++    for (const QRectF &r : allOutputRects) {
++        if (r.contains(candidate)) {
++            return std::nullopt;
++        }
++    }
++
++    const QPointF motion = candidate - currentPos;
++    if (motion.isNull()) {
++        return std::nullopt;
++    }
++
++    const QRectF *sourceRect = nullptr;
++    for (const QRectF &r : allOutputRects) {
++        if (r.contains(currentPos)) {
++            sourceRect = &r;
++            break;
++        }
++    }
++
++    QPointF bestTarget;
++    qreal bestDistSq = std::numeric_limits<qreal>::max();
++    bool found = false;
++
++    for (const QRectF &r : allOutputRects) {
++        if (sourceRect && &r == sourceRect) {
++            continue;
++        }
++        const QPointF projected = projectOntoRect(candidate, r);
++        const QPointF fromCurrent = projected - currentPos;
++        if (QPointF::dotProduct(motion, fromCurrent) <= 0.0) {
++            continue;
++        }
++        const qreal distSq = squaredDistance(candidate, projected);
++        if (distSq < bestDistSq) {
++            bestDistSq = distSq;
++            bestTarget = projected;
++            found = true;
++        }
++    }
++
++    if (!found) {
++        return std::nullopt;
++    }
++    return bestTarget;
++}
++
++} // namespace KWin
+diff --git a/src/cursor_edge_teleport.h b/src/cursor_edge_teleport.h
+new file mode 100644
+index 000000000..e85ee53f1
+--- /dev/null
++++ b/src/cursor_edge_teleport.h
+@@ -0,0 +1,38 @@
++/*
++    SPDX-FileCopyrightText: 2026 tlindell <tlindell@gmail.com>
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++#pragma once
++
++#include <QList>
++#include <QPointF>
++#include <QRectF>
++#include <optional>
++
++namespace KWin
++{
++
++class CursorEdgeTeleport
++{
++public:
++    // Resolve where the cursor should land when a motion event would
++    // carry it outside all enabled outputs.
++    //
++    // currentPos    cursor position before this motion event (expected
++    //               to lie inside some output; defensive: tolerated if not)
++    // candidate     position the motion event would produce after applying
++    //               the delta (may be outside any output)
++    // allOutputRects geometries of all enabled outputs in logical coords;
++    //                the source output is identified internally as the
++    //                one containing currentPos
++    //
++    // Returns nullopt when no teleport is needed (candidate is on some
++    // output) or no reachable target exists in the motion direction.
++    // The caller should fall back to standard clamping in those cases.
++    static std::optional<QPointF> resolve(
++        const QPointF &currentPos,
++        const QPointF &candidate,
++        const QList<QRectF> &allOutputRects);
++};
++
++} // namespace KWin
+diff --git a/src/cursor_edge_teleport_config.cpp b/src/cursor_edge_teleport_config.cpp
+new file mode 100644
+index 000000000..e74c71704
+--- /dev/null
++++ b/src/cursor_edge_teleport_config.cpp
+@@ -0,0 +1,56 @@
++/*
++    SPDX-FileCopyrightText: 2026 tlindell <tlindell@gmail.com>
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++#include "cursor_edge_teleport_config.h"
++
++#include <KConfigGroup>
++#include <KConfigWatcher>
++#include <KSharedConfig>
++
++#include <QObject>
++#include <atomic>
++
++namespace KWin::CursorEdgeTeleportConfig
++{
++
++namespace
++{
++std::atomic<bool> s_enabled{false};
++KConfigWatcher::Ptr s_watcher;
++
++bool readFromConfig()
++{
++    const auto config = KSharedConfig::openConfig(QStringLiteral("kwinrc"));
++    return config->group(QStringLiteral("CursorEdgeTeleport"))
++        .readEntry(QStringLiteral("Enabled"), false);
++}
++} // anonymous namespace
++
++void load()
++{
++    s_enabled.store(readFromConfig(), std::memory_order_relaxed);
++
++    if (s_watcher) {
++        return;
++    }
++    s_watcher = KConfigWatcher::create(
++        KSharedConfig::openConfig(QStringLiteral("kwinrc")));
++    QObject::connect(
++        s_watcher.data(), &KConfigWatcher::configChanged,
++        [](const KConfigGroup &group, const QByteArrayList &names) {
++        if (group.name() != QLatin1String("CursorEdgeTeleport")) {
++            return;
++        }
++        if (names.contains(QByteArrayLiteral("Enabled")) || names.isEmpty()) {
++            s_enabled.store(readFromConfig(), std::memory_order_relaxed);
++        }
++    });
++}
++
++bool enabled()
++{
++    return s_enabled.load(std::memory_order_relaxed);
++}
++
++} // namespace KWin::CursorEdgeTeleportConfig
+diff --git a/src/cursor_edge_teleport_config.h b/src/cursor_edge_teleport_config.h
+new file mode 100644
+index 000000000..d603aa72b
+--- /dev/null
++++ b/src/cursor_edge_teleport_config.h
+@@ -0,0 +1,16 @@
++/*
++    SPDX-FileCopyrightText: 2026 tlindell <tlindell@gmail.com>
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++#pragma once
++
++namespace KWin::CursorEdgeTeleportConfig
++{
++// Loads the [CursorEdgeTeleport]/Enabled key from kwinrc and registers
++// a KConfigWatcher listener so subsequent changes apply at runtime.
++// Idempotent: safe to call multiple times.
++void load();
++
++// Branchless cached lookup of the current Enabled value.
++bool enabled();
++} // namespace KWin::CursorEdgeTeleportConfig
+diff --git a/src/pointer_input.cpp b/src/pointer_input.cpp
+index 161cf3d08..424d45ffb 100644
+--- a/src/pointer_input.cpp
++++ b/src/pointer_input.cpp
+@@ -49,6 +49,9 @@
+ 
+ #include <cmath>
+ 
++#include "cursor_edge_teleport.h"
++#include "cursor_edge_teleport_config.h"
++
+ namespace KWin
+ {
+ 
+@@ -86,6 +89,7 @@ CursorTheme PointerInputRedirection::cursorTheme() const
+ void PointerInputRedirection::init()
+ {
+     Q_ASSERT(!inited());
++    CursorEdgeTeleportConfig::load();
+     waylandServer()->seat()->setHasPointer(input()->hasPointer());
+     connect(input(), &InputRedirection::hasPointerChanged,
+             waylandServer()->seat(), &SeatInterface::setHasPointer);
+@@ -925,7 +929,23 @@ void PointerInputRedirection::updatePosition(const QPointF &pos, const QPointF &
+     }
+     // verify that at least one screen contains the pointer position
+     const LogicalOutput *currentOutput = workspace()->outputAt(pos);
+-    QPointF p = confineToBoundingBox(pos, currentOutput->geometry());
++    QPointF p;
++    if (CursorEdgeTeleportConfig::enabled() && !currentOutput->geometryF().contains(pos)) {
++        QList<QRectF> rects;
++        rects.reserve(workspace()->outputs().size());
++        for (auto *o : workspace()->outputs()) {
++            const RectF g = o->geometryF();
++            rects.append(QRectF(g.x(), g.y(), g.width(), g.height()));
++        }
++        if (auto warp = CursorEdgeTeleport::resolve(m_pos, pos, rects)) {
++            qCDebug(KWIN_CORE) << "CursorEdgeTeleport: warped from" << m_pos << "to" << *warp;
++            p = *warp;
++        } else {
++            p = confineToBoundingBox(pos, currentOutput->geometry());
++        }
++    } else {
++        p = confineToBoundingBox(pos, currentOutput->geometry());
++    }
+     p = applyEdgeBarrier(p, relativeMotion, currentOutput, time);
+     p = applyPointerConfinement(p);
+     if (p == m_pos) {
+-- 
+2.54.0
+
