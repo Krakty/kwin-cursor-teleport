@@ -251,8 +251,8 @@ index 000000000..a34640bea
 +QPointF projectOntoRect(const QPointF &p, const QRectF &r)
 +{
 +    return QPointF(
-+        std::clamp(p.x(), r.left(), r.right()),
-+        std::clamp(p.y(), r.top(), r.bottom()));
++        std::clamp(p.x(), r.left(), r.right() - 1.0),
++        std::clamp(p.y(), r.top(), r.bottom() - 1.0));
 +}
 +
 +qreal squaredDistance(const QPointF &a, const QPointF &b)
