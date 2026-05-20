@@ -14,7 +14,7 @@ Log of patch verification against each KWin version.
 |---|---|---|---|---|
 | T7910 | Aligned multi-monitor (no dead zones) | 6.6.5-1.1 | Non-regression confirmed; flag toggles cleanly; nothing breaks | 2026-05-13 |
 | wks-lt7760 (CachyOS) | 4K eDP-1 + 1080p HDMI-A-1 offset y=453 (centered) | 6.6.5-2.3 | Top dead zone (y=0..453) and bottom dead zone (y=1533..2160) both teleport correctly into the 1080p | 2026-05-20 |
-| BEAST | 2x3 grid with center 2K column between 4Ks | — | Pending user reboot | — |
+| BEAST | 2x3 grid with center 2K column between 4Ks | 6.6.5-2.3 | Installed + configured; pending user logout/login to load patched binary | 2026-05-20 (install) |
 
 ## Notes
 
